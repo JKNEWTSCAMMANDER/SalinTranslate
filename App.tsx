@@ -1,5 +1,4 @@
-
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import { GoogleGenAI, Modality, LiveServerMessage } from '@google/genai';
 import { AppState, TranscriptEntry, Mood } from './types';
 import { decode, decodeAudioData, createPcmBlob } from './services/audioUtils';
@@ -14,24 +13,20 @@ CORE MISSION:
 - If a user speaks English, immediately provide the Filipino translation.
 - If a user speaks Filipino, immediately provide the English translation.
 
-NOISE & CLARITY PROTOCOL:
-- FOCUS EXCLUSIVELY on the primary foreground speaker.
-- IGNORE background noise, music, and distant conversations.
-- If you hear overlapping voices, prioritize the loudest/nearest one.
-- DO NOT translate background noise or non-human sounds.
+ENVIRONMENTAL NOISE PROTOCOL:
+- You are operating in a potentially noisy environment.
+- FOCUS EXCLUSIVELY on the primary speaker in the foreground.
+- COMPLETELY IGNORE background noise, distant voices, music, or street sounds.
+- If the input is unintelligible noise, remain silent. Do not attempt to translate static or background chatter.
 
 EXPRESSIVE EMOTION PROTOCOL:
-You must determine the user's emotion from their voice and content. 
-At the beginning of your transcription part, ALWAYS prepend a mood tag in brackets followed by your translation. 
+At the beginning of your response, ALWAYS prepend a mood tag in brackets followed by your translation. 
 Available tags: [HAPPY], [SAD], [SURPRISED], [ANGRY], [THINKING], [NEUTRAL].
 
 STRICT PROTOCOL:
-1. DO NOT INTERRUPT: Wait for a clear pause from the speaker.
-2. SCRIPT: Use ONLY the Latin alphabet.
-3. NO INTROS: Do not say "Ang salin ay..." or "The translation is...".
-
-WAKE/SLEEP:
-- Respond to "Thank you Salin" or "Salamat Salin" with "[HAPPY] You're welcome!" or "Walang anuman!" and stop.
+1. SCRIPT: Use ONLY the Latin alphabet.
+2. NO INTROS: Do not say "Ang salin ay..." or "The translation is...".
+3. BREVITY: Be concise.
 `;
 
 const App: React.FC = () => {
@@ -62,7 +57,9 @@ const App: React.FC = () => {
       outputAudioContextRef.current.close();
       outputAudioContextRef.current = null;
     }
-    sourcesRef.current.forEach(source => source.stop());
+    sourcesRef.current.forEach(source => {
+      try { source.stop(); } catch(e) {}
+    });
     sourcesRef.current.clear();
     
     if (forceSleep) {
@@ -86,12 +83,11 @@ const App: React.FC = () => {
         recognitionRef.current.stop();
       }
 
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
       
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
 
-      // Enhanced Audio Constraints for better noise filtering
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -116,46 +112,63 @@ const App: React.FC = () => {
         callbacks: {
           onopen: () => {
             setState(AppState.LISTENING);
-            const source = audioContextRef.current!.createMediaStreamSource(stream);
-            const scriptProcessor = audioContextRef.current!.createScriptProcessor(4096, 1, 1);
+            if (!audioContextRef.current) return;
+            const source = audioContextRef.current.createMediaStreamSource(stream);
+            const scriptProcessor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
             
+            const NOISE_THRESHOLD = 0.015;
+
             scriptProcessor.onaudioprocess = (event) => {
               const inputData = event.inputBuffer.getChannelData(0);
-              const pcmBlob = createPcmBlob(inputData);
-              sessionPromise.then((session) => {
-                session.sendRealtimeInput({ media: pcmBlob });
-              });
+              let hasActiveSignal = false;
+              for (let i = 0; i < inputData.length; i++) {
+                if (Math.abs(inputData[i]) > NOISE_THRESHOLD) {
+                  hasActiveSignal = true;
+                  break;
+                }
+              }
+
+              if (hasActiveSignal) {
+                const pcmBlob = createPcmBlob(inputData);
+                sessionPromise.then((session) => {
+                  session.sendRealtimeInput({ media: pcmBlob });
+                });
+              }
             };
 
             source.connect(scriptProcessor);
-            scriptProcessor.connect(audioContextRef.current!.destination);
+            scriptProcessor.connect(audioContextRef.current.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
-            const audioData = message.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+            // Safety checks for parts and audio data
+            const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             
             if (message.serverContent?.outputTranscription) {
               const text = message.serverContent.outputTranscription.text;
-              
-              const moodMatch = text.match(/\[(HAPPY|SAD|SURPRISED|ANGRY|THINKING|NEUTRAL)\]/);
-              if (moodMatch) {
-                setMood(moodMatch[1] as Mood);
-                currentOutputTranscription.current += text.replace(moodMatch[0], '').trim();
-              } else {
-                currentOutputTranscription.current += text;
+              if (text) {
+                const moodMatch = text.match(/\[(HAPPY|SAD|SURPRISED|ANGRY|THINKING|NEUTRAL)\]/);
+                if (moodMatch) {
+                  setMood(moodMatch[1] as Mood);
+                  currentOutputTranscription.current += text.replace(moodMatch[0], '').trim();
+                } else {
+                  currentOutputTranscription.current += text;
+                }
               }
             } else if (message.serverContent?.inputTranscription) {
               const text = message.serverContent.inputTranscription.text;
-              currentInputTranscription.current += text;
-              setState(AppState.LISTENING);
-              
-              if (text.toLowerCase().includes("salamat salin") || text.toLowerCase().includes("thank you salin")) {
-                setTimeout(() => stopConversation(true), 3000);
+              if (text) {
+                currentInputTranscription.current += text;
+                setState(AppState.LISTENING);
+                
+                const lowerText = text.toLowerCase();
+                if (lowerText.includes("salamat salin") || lowerText.includes("thank you salin")) {
+                  setTimeout(() => stopConversation(true), 3000);
+                }
               }
             }
 
             if (message.serverContent?.turnComplete) {
               const output = currentOutputTranscription.current.trim();
-              
               if (output) {
                 setTranscripts(prev => [
                   ...prev,
@@ -197,7 +210,9 @@ const App: React.FC = () => {
             }
 
             if (message.serverContent?.interrupted) {
-              sourcesRef.current.forEach(s => s.stop());
+              sourcesRef.current.forEach(s => {
+                try { s.stop(); } catch(e) {}
+              });
               sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
               setState(AppState.LISTENING);
@@ -217,6 +232,7 @@ const App: React.FC = () => {
 
       sessionRef.current = await sessionPromise;
     } catch (error) {
+      console.error(error);
       setErrorMessage('Mic access denied.');
       setState(AppState.ERROR);
     }
@@ -233,15 +249,7 @@ const App: React.FC = () => {
 
     recognition.onresult = (event: any) => {
       const lastMatch = event.results[event.results.length - 1][0].transcript.toLowerCase();
-      const wakeWords = [
-        "hey salin", 
-        "hi salin", 
-        "hoy salin", 
-        "kamusta salin", 
-        "kumusta salin", 
-        "what's up salin",
-        "translate"
-      ];
+      const wakeWords = ["hey salin", "hi salin", "hoy salin", "kamusta salin", "kumusta salin", "translate"];
       
       if (wakeWords.some(word => lastMatch.includes(word))) {
         startConversation();
@@ -284,8 +292,8 @@ const App: React.FC = () => {
         <div className="flex items-center gap-4">
             {(state === AppState.LISTENING || state === AppState.SPEAKING) && (
               <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20">
-                <i className="fas fa-shield-halved text-[8px] text-cyan-400"></i>
-                <span className="text-[7px] text-cyan-400 font-black uppercase tracking-widest">PureVoice Filter</span>
+                <i className="fas fa-filter text-[8px] text-cyan-400"></i>
+                <span className="text-[7px] text-cyan-400 font-black uppercase tracking-widest">Noise Gate Active</span>
               </div>
             )}
             <div className="flex items-center gap-2">
