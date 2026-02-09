@@ -64,7 +64,7 @@ const Orb: React.FC<OrbProps> = ({ state, mood }) => {
 
   const getColors = () => {
     if (state === AppState.ERROR) return 'from-red-800 to-red-950 shadow-red-900/50';
-    if (state === AppState.CONNECTING) return 'from-yellow-400 to-orange-500';
+    if (state === AppState.CONNECTING) return 'from-yellow-400 to-orange-500 animate-thinking';
     if (state === AppState.SLEEP) return 'from-slate-800 to-slate-900';
 
     switch (mood) {
@@ -77,7 +77,7 @@ const Orb: React.FC<OrbProps> = ({ state, mood }) => {
       case Mood.ANGRY:
         return 'from-rose-600 via-red-700 to-black shadow-rose-900/70';
       case Mood.THINKING:
-        return 'from-purple-500 via-indigo-600 to-slate-900 shadow-purple-900/50';
+        return 'from-purple-500 via-indigo-600 to-slate-900 shadow-purple-900/50 animate-thinking';
       default:
         return state === AppState.LISTENING 
           ? 'from-cyan-400 via-blue-500 to-indigo-600 shadow-cyan-500/70'
@@ -98,7 +98,6 @@ const Orb: React.FC<OrbProps> = ({ state, mood }) => {
     let pupilSize = 4;
     let showBlush = false;
 
-    // Mood-specific overrides
     switch (mood) {
       case Mood.HAPPY:
         browL = "M25 32 Q35 25 45 32";
@@ -133,7 +132,6 @@ const Orb: React.FC<OrbProps> = ({ state, mood }) => {
         break;
     }
 
-    // State specific overrides
     if (state === AppState.SLEEP) {
       browL = "M25 40 Q35 42 45 40";
       browR = "M55 40 Q65 42 75 40";
@@ -180,6 +178,9 @@ const Orb: React.FC<OrbProps> = ({ state, mood }) => {
       <div className="w-36 h-36">
         {renderFace()}
       </div>
+      {state === AppState.STANDBY && (
+        <div className="absolute inset-0 rounded-full border-2 border-indigo-400/30 animate-ping opacity-20" />
+      )}
     </div>
   );
 };
