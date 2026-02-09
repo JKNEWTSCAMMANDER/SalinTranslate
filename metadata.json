@@ -1,0 +1,7 @@
+{
+  "name": "SalinLive - Voice Translator",
+  "description": "A lively real-time speech-to-speech translator between English and Filipino using Gemini Live API, featuring voice activation and an interactive animated UI.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}

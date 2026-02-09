@@ -1,0 +1,66 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SalinLive - Translator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    @keyframes blob {
+      0% { transform: scale(1); }
+      33% { transform: scale(1.1) rotate(2deg); }
+      66% { transform: scale(0.9) rotate(-2deg); }
+      100% { transform: scale(1); }
+    }
+    @keyframes listening-pulse {
+      0% { transform: scale(1); box-shadow: 0 0 20px rgba(6, 182, 212, 0.4); }
+      50% { transform: scale(1.05); box-shadow: 0 0 50px rgba(34, 211, 238, 0.6); }
+      100% { transform: scale(1); box-shadow: 0 0 20px rgba(6, 182, 212, 0.4); }
+    }
+    @keyframes speaking-pulse {
+      0% { transform: scale(1.1); box-shadow: 0 0 30px rgba(244, 63, 94, 0.5); filter: brightness(1); }
+      50% { transform: scale(1.2); box-shadow: 0 0 60px rgba(245, 158, 11, 0.8); filter: brightness(1.3); }
+      100% { transform: scale(1.1); box-shadow: 0 0 30px rgba(244, 63, 94, 0.5); filter: brightness(1); }
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-blob {
+      animation: blob 4s infinite alternate ease-in-out;
+    }
+    .animate-listening {
+      animation: listening-pulse 1.5s infinite ease-in-out;
+    }
+    .animate-speaking {
+      animation: speaking-pulse 0.4s infinite ease-in-out;
+    }
+    .no-scrollbar::-webkit-scrollbar {
+      display: none;
+    }
+    .no-scrollbar {
+      -ms-overflow-style: none;
+      scrollbar-width: none;
+    }
+  </style>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.4",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.40.0",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.3"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+<body class="bg-slate-900 text-white overflow-hidden">
+  <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
