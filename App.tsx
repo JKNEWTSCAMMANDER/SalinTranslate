@@ -14,19 +14,13 @@ CORE MISSION:
 - If a user speaks Filipino, immediately provide the English translation.
 
 ENVIRONMENTAL NOISE PROTOCOL:
-- You are operating in a potentially noisy environment.
 - FOCUS EXCLUSIVELY on the primary speaker in the foreground.
-- COMPLETELY IGNORE background noise, distant voices, music, or street sounds.
-- If the input is unintelligible noise, remain silent. Do not attempt to translate static or background chatter.
+- COMPLETELY IGNORE background noise, distant voices, or music.
+- If the input is unintelligible noise, remain silent.
 
 EXPRESSIVE EMOTION PROTOCOL:
-At the beginning of your response, ALWAYS prepend a mood tag in brackets followed by your translation. 
+At the beginning of your response, ALWAYS prepend a mood tag in brackets.
 Available tags: [HAPPY], [SAD], [SURPRISED], [ANGRY], [THINKING], [NEUTRAL].
-
-STRICT PROTOCOL:
-1. SCRIPT: Use ONLY the Latin alphabet.
-2. NO INTROS: Do not say "Ang salin ay..." or "The translation is...".
-3. BREVITY: Be concise.
 `;
 
 const App: React.FC = () => {
@@ -83,11 +77,20 @@ const App: React.FC = () => {
         recognitionRef.current.stop();
       }
 
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+      // 1. Initialize API Client
+      const apiKey = process.env.API_KEY;
+      if (!apiKey) throw new Error("API Key is missing in environment variables.");
+      const ai = new GoogleGenAI({ apiKey });
       
+      // 2. Initialize Audio Contexts
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
 
+      // Ensure contexts are active (browsers often start them suspended)
+      if (audioContextRef.current.state === 'suspended') await audioContextRef.current.resume();
+      if (outputAudioContextRef.current.state === 'suspended') await outputAudioContextRef.current.resume();
+
+      // 3. Request Microphone Access
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
@@ -98,6 +101,7 @@ const App: React.FC = () => {
         } 
       });
 
+      // 4. Connect to Live API
       const sessionPromise = ai.live.connect({
         model: 'gemini-2.5-flash-native-audio-preview-12-2025',
         config: {
@@ -116,35 +120,23 @@ const App: React.FC = () => {
             const source = audioContextRef.current.createMediaStreamSource(stream);
             const scriptProcessor = audioContextRef.current.createScriptProcessor(4096, 1, 1);
             
-            const NOISE_THRESHOLD = 0.015;
-
             scriptProcessor.onaudioprocess = (event) => {
               const inputData = event.inputBuffer.getChannelData(0);
-              let hasActiveSignal = false;
-              for (let i = 0; i < inputData.length; i++) {
-                if (Math.abs(inputData[i]) > NOISE_THRESHOLD) {
-                  hasActiveSignal = true;
-                  break;
-                }
-              }
-
-              if (hasActiveSignal) {
-                const pcmBlob = createPcmBlob(inputData);
-                sessionPromise.then((session) => {
-                  session.sendRealtimeInput({ media: pcmBlob });
-                });
-              }
+              const pcmBlob = createPcmBlob(inputData);
+              sessionPromise.then((session) => {
+                session.sendRealtimeInput({ media: pcmBlob });
+              });
             };
 
             source.connect(scriptProcessor);
             scriptProcessor.connect(audioContextRef.current.destination);
           },
           onmessage: async (message: LiveServerMessage) => {
-            // Safety checks for parts and audio data
-            const audioData = message.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
+            const serverContent = message.serverContent;
+            const audioData = serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
             
-            if (message.serverContent?.outputTranscription) {
-              const text = message.serverContent.outputTranscription.text;
+            if (serverContent?.outputTranscription) {
+              const text = serverContent.outputTranscription.text;
               if (text) {
                 const moodMatch = text.match(/\[(HAPPY|SAD|SURPRISED|ANGRY|THINKING|NEUTRAL)\]/);
                 if (moodMatch) {
@@ -154,20 +146,15 @@ const App: React.FC = () => {
                   currentOutputTranscription.current += text;
                 }
               }
-            } else if (message.serverContent?.inputTranscription) {
-              const text = message.serverContent.inputTranscription.text;
+            } else if (serverContent?.inputTranscription) {
+              const text = serverContent.inputTranscription.text;
               if (text) {
                 currentInputTranscription.current += text;
                 setState(AppState.LISTENING);
-                
-                const lowerText = text.toLowerCase();
-                if (lowerText.includes("salamat salin") || lowerText.includes("thank you salin")) {
-                  setTimeout(() => stopConversation(true), 3000);
-                }
               }
             }
 
-            if (message.serverContent?.turnComplete) {
+            if (serverContent?.turnComplete) {
               const output = currentOutputTranscription.current.trim();
               if (output) {
                 setTranscripts(prev => [
@@ -184,9 +171,10 @@ const App: React.FC = () => {
 
             if (audioData) {
               setState(AppState.SPEAKING);
-              const ctx = outputAudioContextRef.current!;
-              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
+              const ctx = outputAudioContextRef.current;
+              if (!ctx) return;
               
+              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
               const buffer = await decodeAudioData(decode(audioData), ctx, 24000, 1);
               const source = ctx.createBufferSource();
               source.buffer = buffer;
@@ -194,13 +182,8 @@ const App: React.FC = () => {
               
               source.addEventListener('ended', () => {
                 sourcesRef.current.delete(source);
-                if (sourcesRef.current.size === 0) {
-                  setTimeout(() => {
-                    if (sourcesRef.current.size === 0 && state !== AppState.SLEEP) {
-                      setState(AppState.LISTENING);
-                      setMood(Mood.NEUTRAL);
-                    }
-                  }, 500);
+                if (sourcesRef.current.size === 0 && state !== AppState.SLEEP) {
+                  setState(AppState.LISTENING);
                 }
               });
 
@@ -209,19 +192,16 @@ const App: React.FC = () => {
               sourcesRef.current.add(source);
             }
 
-            if (message.serverContent?.interrupted) {
-              sourcesRef.current.forEach(s => {
-                try { s.stop(); } catch(e) {}
-              });
+            if (serverContent?.interrupted) {
+              sourcesRef.current.forEach(s => { try { s.stop(); } catch(e) {} });
               sourcesRef.current.clear();
               nextStartTimeRef.current = 0;
               setState(AppState.LISTENING);
-              setMood(Mood.NEUTRAL);
             }
           },
           onerror: (err) => {
             console.error('API Error:', err);
-            setErrorMessage('Connection failed.');
+            setErrorMessage('Connection failed. Please check your API key.');
             setState(AppState.ERROR);
           },
           onclose: () => {
@@ -231,9 +211,13 @@ const App: React.FC = () => {
       });
 
       sessionRef.current = await sessionPromise;
-    } catch (error) {
-      console.error(error);
-      setErrorMessage('Mic access denied.');
+    } catch (error: any) {
+      console.error('Initialization Error:', error);
+      if (error.name === 'NotAllowedError' || error.name === 'PermissionDeniedError') {
+        setErrorMessage('Microphone access was denied. Check site permissions.');
+      } else {
+        setErrorMessage(`Failed to start: ${error.message || 'Unknown error'}`);
+      }
       setState(AppState.ERROR);
     }
   };
@@ -248,8 +232,9 @@ const App: React.FC = () => {
     recognition.lang = 'en-US';
 
     recognition.onresult = (event: any) => {
-      const lastMatch = event.results[event.results.length - 1][0].transcript.toLowerCase();
-      const wakeWords = ["hey salin", "hi salin", "hoy salin", "kamusta salin", "kumusta salin", "translate"];
+      const results = event.results;
+      const lastMatch = results[results.length - 1][0].transcript.toLowerCase();
+      const wakeWords = ["hey salin", "hi salin", "translate"];
       
       if (wakeWords.some(word => lastMatch.includes(word))) {
         startConversation();
@@ -258,9 +243,7 @@ const App: React.FC = () => {
     };
 
     recognition.onerror = () => setState(AppState.IDLE);
-    recognition.onend = () => {
-      if (state === AppState.STANDBY) recognition.start();
-    };
+    recognition.onend = () => { if (state === AppState.STANDBY) recognition.start(); };
 
     recognitionRef.current = recognition;
     recognition.start();
@@ -289,22 +272,14 @@ const App: React.FC = () => {
             <span className="text-[7px] text-yellow-500 font-bold uppercase tracking-[0.2em]">Ph</span>
           </div>
         </div>
-        <div className="flex items-center gap-4">
-            {(state === AppState.LISTENING || state === AppState.SPEAKING) && (
-              <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/20">
-                <i className="fas fa-filter text-[8px] text-cyan-400"></i>
-                <span className="text-[7px] text-cyan-400 font-black uppercase tracking-widest">Noise Gate Active</span>
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-                <div className={`w-1.5 h-1.5 rounded-full transition-all duration-500 ${
-                  state === AppState.LISTENING ? 'bg-cyan-400 shadow-[0_0_8px_cyan]' : 
-                  state === AppState.STANDBY ? 'bg-indigo-400 shadow-[0_0_8px_indigo]' :
-                  state === AppState.SPEAKING ? 'bg-rose-400 shadow-[0_0_8px_rose] scale-125' :
-                  'bg-slate-700'
-                }`}></div>
-                <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">{state}</span>
-            </div>
+        <div className="flex items-center gap-2">
+            <div className={`w-1.5 h-1.5 rounded-full transition-all duration-500 ${
+              state === AppState.LISTENING ? 'bg-cyan-400 shadow-[0_0_8px_cyan]' : 
+              state === AppState.STANDBY ? 'bg-indigo-400 shadow-[0_0_8px_indigo]' :
+              state === AppState.SPEAKING ? 'bg-rose-400 shadow-[0_0_8px_rose] scale-125' :
+              'bg-slate-700'
+            }`}></div>
+            <span className="text-[8px] text-slate-500 font-black uppercase tracking-widest">{state}</span>
         </div>
       </header>
 
